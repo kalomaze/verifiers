@@ -2,7 +2,7 @@ import json
 import random
 from typing import List, Dict, Any, Sequence, Union
 
-from vllm import LLM, SamplingParams  # type: ignore
+from vllm import LLM, SamplingParams
 from verifiers.envs.environment import Environment
 
 class SimpleEnv(Environment):
@@ -38,34 +38,35 @@ class SimpleEnv(Environment):
                  use_chat: bool = True,
                  **kwargs: Any) -> Union[Dict[str, Any], List[Sequence[int]], List[str], List[List[Dict[str, Any]]]]:
 
-        # Clone and modify sampling params
         custom_sp = sampling_params.clone()
         for k, v in self.sampling_args.items():
             setattr(custom_sp, k, v)
 
-        # Get completions
+        states = []
         if use_chat:
             completions = llm.chat(prompts, sampling_params=custom_sp, use_tqdm=False)
-            states = []
             for i, completion in enumerate(completions):
-                states.append({
+                state = {
                     "messages": prompts[i] + [{"role": "assistant", "content": completion.outputs[0].text}],
                     "prompt_ids": list(completion.prompt_token_ids),
                     "completion_ids": list(completion.outputs[0].token_ids),
                     "completion_mask": [1] * len(completion.outputs[0].token_ids)
-                })
+                }
+                states.append(state)
         else:
             text_prompts = [p[-1]['content'] for p in prompts]
             outputs = llm.generate(text_prompts, sampling_params=custom_sp)
-            states = []
             for i, output in enumerate(outputs):
-                states.append({
+                state = {
+                    "messages": [{"role": "user", "content": text_prompts[i]},
+                                 {"role": "assistant", "content": output.outputs[0].text}],
                     "prompt": text_prompts[i],
                     "completion": output.outputs[0].text,
                     "prompt_ids": output.prompt_token_ids,
                     "completion_ids": output.outputs[0].token_ids,
                     "completion_mask": [1] * len(output.outputs[0].token_ids)
-                })
+                }
+                states.append(state)
 
         # Logging
         if states:

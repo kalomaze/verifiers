@@ -1,4 +1,3 @@
-from trl import GRPOTrainer
 import verifiers as vf
 import wandb
 import os
@@ -43,7 +42,7 @@ if int(os.getenv("RANK", 0)) == 0:
     wandb.save(os.path.join(copy_dir, "*.py"))
     wandb.save(os.path.join(copy_dir, "verifiers/**/*.py"))
 
-trainer = GRPOTrainer(
+trainer = vf.GRPOEnvTrainer(
     model=model,
     processing_class=tokenizer,
     reward_funcs=rubric,
