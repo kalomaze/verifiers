@@ -29,4 +29,6 @@ logs/
 
 
 # WIPs
-wip/
+wip/configs/accelerate/
+configs/deepspeed/
+verifiers/utils/config_utils.py

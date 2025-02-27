@@ -1,11 +1,9 @@
 import json
 import random
-from typing import List, Dict, Sequence, Any, Union
+from typing import List, Dict, Any, Sequence, Union
 
-from ..imports import LLM, SamplingParams  # type: ignore
-
+from vllm import LLM, SamplingParams  # type: ignore
 from verifiers.envs.environment import Environment
-
 
 class SimpleEnv(Environment):
     def __init__(self,
@@ -32,32 +30,70 @@ class SimpleEnv(Environment):
         messages.append({"role": "user", "content": prompt})
         return messages
 
-    def generate(self, prompts: List[List[Dict[str, Any]]],
+    def generate(self,
+                 prompts: List[List[Dict[str, Any]]],
                  llm: LLM,
                  sampling_params: SamplingParams,
-                 **kwargs: Any) -> Dict[str, List[Sequence[int]] | List[str] | List[List[Dict[str, Any]]]]:
-        
-        custom_sp = sampling_params.clone() 
+                 output_type: str = "ids",
+                 use_chat: bool = True,
+                 **kwargs: Any) -> Union[Dict[str, Any], List[Sequence[int]], List[str], List[List[Dict[str, Any]]]]:
+
+        # Clone and modify sampling params
+        custom_sp = sampling_params.clone()
         for k, v in self.sampling_args.items():
             setattr(custom_sp, k, v)
-        states = [{
-            "messages": m,
-            "prompt_ids": [],
-            "completion_ids": [],
-            "completion_mask": []
-        } for m in prompts]
 
-        # get completions
-        completions = llm.chat(prompts, sampling_params=custom_sp, use_tqdm=False) # type: ignore
-        for i, completion in enumerate(completions):
-            states[i]["messages"].append({"role": "assistant", "content": completion.outputs[0].text})
-            states[i]["prompt_ids"] = list(completion.prompt_token_ids) # type: ignore
-            states[i]["completion_ids"] = list(completion.outputs[0].token_ids)
-            states[i]["completion_mask"] = [1] * len(states[i]["completion_ids"])
+        # Get completions
+        if use_chat:
+            completions = llm.chat(prompts, sampling_params=custom_sp, use_tqdm=False)
+            states = []
+            for i, completion in enumerate(completions):
+                states.append({
+                    "messages": prompts[i] + [{"role": "assistant", "content": completion.outputs[0].text}],
+                    "prompt_ids": list(completion.prompt_token_ids),
+                    "completion_ids": list(completion.outputs[0].token_ids),
+                    "completion_mask": [1] * len(completion.outputs[0].token_ids)
+                })
+        else:
+            text_prompts = [p[-1]['content'] for p in prompts]
+            outputs = llm.generate(text_prompts, sampling_params=custom_sp)
+            states = []
+            for i, output in enumerate(outputs):
+                states.append({
+                    "prompt": text_prompts[i],
+                    "completion": output.outputs[0].text,
+                    "prompt_ids": output.prompt_token_ids,
+                    "completion_ids": output.outputs[0].token_ids,
+                    "completion_mask": [1] * len(output.outputs[0].token_ids)
+                })
 
-        output = {
-            "ids": [states[i]["completion_ids"] for i in range(len(states))],
-            "messages": [states[i]["messages"][-1:] for i in range(len(states))],
-            "mask": [states[i]["completion_mask"] for i in range(len(states))]
-        }
-        return output
+        # Logging
+        if states:
+            self.logger.debug(f"Prompt 0 IDs: {states[0]['prompt_ids']}")
+            self.logger.debug(f"Completion 0 IDs: {states[0]['completion_ids']}")
+            if use_chat:
+                self.logger.info(
+                    "Prompt 0 Messages:\n%s\n\nCompletion 0:\n%s",
+                    json.dumps(states[0]["messages"][:-1], indent=4),
+                    json.dumps(states[0]["messages"][-1], indent=4)
+                )
+            else:
+                self.logger.info(
+                    "Prompt 0 Text:\n%s\n\nCompletion 0:\n%s",
+                    states[0]["prompt"],
+                    states[0]["completion"]
+                )
+
+        # Return formatted output
+        if output_type == "ids":
+            return {
+                "ids": [s["completion_ids"] for s in states],
+                "messages": [s["messages"][-1:] for s in states],
+                "mask": [s["completion_mask"] for s in states]
+            }
+        elif output_type == "text":
+            return [s["completion"] for s in states]
+        elif output_type == "messages":
+            return [s["messages"] for s in states]
+        else:
+            raise ValueError(f"Invalid output type: {output_type}")
